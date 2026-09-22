@@ -1,0 +1,18 @@
+{
+    "name": "nantun-car-remote",
+    "version": "1.0.0",
+    "description": "南屯遙控車：收 iPad 控制台訊號、驅動 MoonCar 差速馬達、回傳感測值。全中文、原生風格積木（帽子事件／六角布林／圓角數值）。",
+    "license": "MIT",
+    "dependencies": {
+        "core": "*",
+        "bluetooth": "*"
+    },
+    "files": [
+        "main.ts",
+        "README.md"
+    ],
+    "testFiles": [],
+    "supportedTargets": [
+        "microbit"
+    ]
+}
