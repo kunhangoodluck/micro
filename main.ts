@@ -13,7 +13,6 @@
  * 需 micro:bit V2，專案設定 No Pairing Required。
  */
 //% weight=100 color=#2b6cb0 icon="\uf1b9" block="南屯遙控車"
-//% groups=['起手', '收控制訊號', '車子動作', '感測與回傳']
 namespace nantunCar {
 
     // 下拉選單：按鈕代號（顯示中文，實際送出英文短碼）
@@ -34,7 +33,7 @@ namespace nantunCar {
         B = 6
     }
 
-    // ---- 內部狀態：每個代號各用一個變數存（不用陣列查表，最保險）----
+    // ---- 內部狀態：每個代號各用一個變數存 ----
     let started = false
     let connected = false
 
@@ -49,94 +48,82 @@ namespace nantunCar {
     let vJX = 0
     let vJY = 0
 
-    function getBtnVal(b: Btn): number {
-        if (b == Btn.FWD) return vFWD
-        if (b == Btn.BACK) return vBACK
-        if (b == Btn.LEFT) return vLEFT
-        if (b == Btn.RIGHT) return vRIGHT
-        if (b == Btn.GO) return vGO
-        if (b == Btn.A) return vA
-        return vB
+    // 事件旗標：主程式在迴圈裡自己判斷，不用回呼陣列
+    let pressedFWD = false
+    let pressedBACK = false
+    let pressedLEFT = false
+    let pressedRIGHT = false
+    let pressedGO = false
+    let pressedA = false
+    let pressedB = false
+
+    function limit(x: number): number {
+        if (x > 100) return 100
+        if (x < -100) return -100
+        return x
     }
 
-    // 事件處理器（用固定陣列，只存 handler）
-    let pressCode: number[] = []
-    let pressAct: (() => void)[] = []
-    let releaseCode: number[] = []
-    let releaseAct: (() => void)[] = []
-
-    function fireBtn(code: number, down: boolean): void {
-        if (down) {
-            for (let i = 0; i < pressCode.length; i++) {
-                if (pressCode[i] == code) pressAct[i]()
-            }
-        } else {
-            for (let i = 0; i < releaseCode.length; i++) {
-                if (releaseCode[i] == code) releaseAct[i]()
-            }
-        }
-    }
-
-    // 把一顆按鈕代號的新值存起來，並在 0/1 變化時觸發事件
-    function setBtn(code: number, v: number): void {
-        let old = getBtnVal(code)
-        if (code == Btn.FWD) vFWD = v
-        else if (code == Btn.BACK) vBACK = v
-        else if (code == Btn.LEFT) vLEFT = v
-        else if (code == Btn.RIGHT) vRIGHT = v
-        else if (code == Btn.GO) vGO = v
-        else if (code == Btn.A) vA = v
-        else if (code == Btn.B) vB = v
-        if (v == 1 && old != 1) fireBtn(code, true)
-        else if (v == 0 && old != 0) fireBtn(code, false)
+    // 把 0~100 換成 0~1023（自己算，不用 Math.map）
+    function toPwm(percent: number): number {
+        let p = percent
+        if (p < 0) p = 0
+        if (p > 100) p = 100
+        return Math.idiv(p * 1023, 100)
     }
 
     // ---- 馬達差速（內部）----
     function driveWheels(left: number, right: number): void {
-        left = Math.constrain(left, -100, 100)
-        right = Math.constrain(right, -100, 100)
+        left = limit(left)
+        right = limit(right)
         // 左輪 P8(前) / P14(後)
         if (left >= 0) {
-            pins.analogWritePin(AnalogPin.P8, Math.round(Math.map(left, 0, 100, 0, 1023)))
+            pins.analogWritePin(AnalogPin.P8, toPwm(left))
             pins.analogWritePin(AnalogPin.P14, 0)
         } else {
             pins.analogWritePin(AnalogPin.P8, 0)
-            pins.analogWritePin(AnalogPin.P14, Math.round(Math.map(0 - left, 0, 100, 0, 1023)))
+            pins.analogWritePin(AnalogPin.P14, toPwm(0 - left))
         }
         // 右輪 P2(前) / P13(後)
         if (right >= 0) {
-            pins.analogWritePin(AnalogPin.P2, Math.round(Math.map(right, 0, 100, 0, 1023)))
+            pins.analogWritePin(AnalogPin.P2, toPwm(right))
             pins.analogWritePin(AnalogPin.P13, 0)
         } else {
             pins.analogWritePin(AnalogPin.P2, 0)
-            pins.analogWritePin(AnalogPin.P13, Math.round(Math.map(0 - right, 0, 100, 0, 1023)))
+            pins.analogWritePin(AnalogPin.P13, toPwm(0 - right))
         }
     }
 
-    // ---- 收訊解析：用 split，最標準 ----
-    function handleLine(line: string): void {
-        let parts = line.split(":")
-        if (parts.length < 2) return
-        let code = parts[0]
-        let rest = parts[1]
+    // 把一顆按鈕的值存起來
+    function setBtn(code: string, v: number): void {
+        let on = (v == 1)
+        if (code == "FWD") { vFWD = v; pressedFWD = on }
+        else if (code == "BACK") { vBACK = v; pressedBACK = on }
+        else if (code == "LEFT") { vLEFT = v; pressedLEFT = on }
+        else if (code == "RIGHT") { vRIGHT = v; pressedRIGHT = on }
+        else if (code == "GO") { vGO = v; pressedGO = on }
+        else if (code == "A") { vA = v; pressedA = on }
+        else if (code == "B") { vB = v; pressedB = on }
+    }
 
-        // 搖桿 x,y
-        if (rest.indexOf(",") >= 0) {
-            let xy = rest.split(",")
-            vJX = parseFloat(xy[0])
-            if (xy.length > 1) vJY = parseFloat(xy[1])
+    // ---- 收訊解析：自己找冒號和逗號，不用 split ----
+    function handleLine(line: string): void {
+        let colon = line.indexOf(":")
+        if (colon < 0) return
+        let code = line.substr(0, colon)
+        let rest = line.substr(colon + 1, line.length - colon - 1)
+
+        let comma = rest.indexOf(",")
+        if (comma >= 0) {
+            let sx = rest.substr(0, comma)
+            let sy = rest.substr(comma + 1, rest.length - comma - 1)
+            vJX = parseFloat(sx)
+            vJY = parseFloat(sy)
             return
         }
 
         let v = parseFloat(rest)
-        if (code == "FWD") setBtn(Btn.FWD, v)
-        else if (code == "BACK") setBtn(Btn.BACK, v)
-        else if (code == "LEFT") setBtn(Btn.LEFT, v)
-        else if (code == "RIGHT") setBtn(Btn.RIGHT, v)
-        else if (code == "GO") setBtn(Btn.GO, v)
-        else if (code == "A") setBtn(Btn.A, v)
-        else if (code == "B") setBtn(Btn.B, v)
-        else if (code == "STEER") vSTEER = v
+        if (code == "STEER") vSTEER = v
+        else setBtn(code, v)
     }
 
     // ==================== 起手 ====================
@@ -145,7 +132,7 @@ namespace nantunCar {
      * 啟動遙控：開啟藍牙、開始接收 iPad 控制台的訊號。放在「當啟動時」。
      */
     //% blockId=nc_start block="啟動遙控自走車"
-    //% group="起手" weight=100
+    //% weight=100
     export function startRemote(): void {
         if (started) return
         started = true
@@ -161,6 +148,7 @@ namespace nantunCar {
             connected = false
             driveWheels(0, 0)
             vFWD = 0; vBACK = 0; vLEFT = 0; vRIGHT = 0; vGO = 0; vA = 0; vB = 0; vSTEER = 0; vJX = 0; vJY = 0
+            pressedFWD = false; pressedBACK = false; pressedLEFT = false; pressedRIGHT = false; pressedGO = false; pressedA = false; pressedB = false
             basic.showIcon(IconNames.No)
         })
         bluetooth.onUartDataReceived(serial.delimiters(Delimiter.NewLine), function () {
@@ -173,7 +161,7 @@ namespace nantunCar {
      * 平板是否已連線。
      */
     //% blockId=nc_connected block="平板已連線?"
-    //% group="起手" weight=90
+    //% weight=90
     export function isConnected(): boolean {
         return connected
     }
@@ -181,39 +169,25 @@ namespace nantunCar {
     // ==================== 收控制訊號 ====================
 
     /**
-     * 當 iPad 上某顆按鈕「被按下」時執行。
-     */
-    //% blockId=nc_on_press block="當收到按鈕 %b 被按下"
-    //% group="收控制訊號" weight=100
-    export function onButtonDown(b: Btn, handler: () => void): void {
-        pressCode.push(b)
-        pressAct.push(handler)
-    }
-
-    /**
-     * 當 iPad 上某顆按鈕「放開」時執行。
-     */
-    //% blockId=nc_on_release block="當收到按鈕 %b 放開"
-    //% group="收控制訊號" weight=95
-    export function onButtonUp(b: Btn, handler: () => void): void {
-        releaseCode.push(b)
-        releaseAct.push(handler)
-    }
-
-    /**
-     * 這顆 iPad 按鈕現在是不是被按住？（可放進「如果」）
+     * 這顆 iPad 按鈕現在是不是被按住？（可放進「如果」或「重複無限次」裡判斷）
      */
     //% blockId=nc_is_pressed block="按鈕 %b 被按下?"
-    //% group="收控制訊號" weight=90
+    //% weight=80
     export function isPressed(b: Btn): boolean {
-        return getBtnVal(b) == 1
+        if (b == Btn.FWD) return pressedFWD
+        if (b == Btn.BACK) return pressedBACK
+        if (b == Btn.LEFT) return pressedLEFT
+        if (b == Btn.RIGHT) return pressedRIGHT
+        if (b == Btn.GO) return pressedGO
+        if (b == Btn.A) return pressedA
+        return pressedB
     }
 
     /**
      * iPad 方向盤／滑桿的最新數值（-100~100，中間 0）。
      */
     //% blockId=nc_steer block="方向盤數值"
-    //% group="收控制訊號" weight=80
+    //% weight=70
     export function steerValue(): number {
         return vSTEER
     }
@@ -222,7 +196,7 @@ namespace nantunCar {
      * iPad 搖桿左右方向（X）：-100(左) ~ 100(右)。
      */
     //% blockId=nc_joy_x block="搖桿 X"
-    //% group="收控制訊號" weight=70
+    //% weight=69
     export function joystickX(): number {
         return vJX
     }
@@ -231,7 +205,7 @@ namespace nantunCar {
      * iPad 搖桿上下方向（Y）：-100(下) ~ 100(上)。
      */
     //% blockId=nc_joy_y block="搖桿 Y"
-    //% group="收控制訊號" weight=69
+    //% weight=68
     export function joystickY(): number {
         return vJY
     }
@@ -244,7 +218,7 @@ namespace nantunCar {
     //% blockId=nc_wheels block="設定左輪 %left 右輪 %right"
     //% left.min=-100 left.max=100 right.min=-100 right.max=100
     //% left.defl=50 right.defl=50
-    //% group="車子動作" weight=100
+    //% weight=60
     export function setWheels(left: number, right: number): void {
         driveWheels(left, right)
     }
@@ -253,7 +227,7 @@ namespace nantunCar {
      * 停車（左右輪都設 0）。
      */
     //% blockId=nc_stop block="停車"
-    //% group="車子動作" weight=90
+    //% weight=59
     export function stopCar(): void {
         driveWheels(0, 0)
     }
@@ -264,7 +238,7 @@ namespace nantunCar {
      * 循跡感測值：0~3（P15/P16 兩顆感測器的四種組合）。
      */
     //% blockId=nc_line block="循跡值"
-    //% group="感測與回傳" weight=100
+    //% weight=50
     export function lineValue(): number {
         let a = pins.digitalReadPin(DigitalPin.P15)
         let b = pins.digitalReadPin(DigitalPin.P16)
@@ -278,8 +252,8 @@ namespace nantunCar {
      * 回傳一個數值給 iPad 儀表板（例如 代號 LINE、數值 循跡值）。
      */
     //% blockId=nc_report block="回傳 %code 數值 %v 給平板"
-    //% group="感測與回傳" weight=90
+    //% weight=49
     export function report(code: string, v: number): void {
-        if (connected) bluetooth.uartWriteString(code + ":" + v + "\n")
+        if (connected) bluetooth.uartWriteString("" + code + ":" + v + "\n")
     }
 }
