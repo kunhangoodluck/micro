@@ -19,57 +19,80 @@ namespace nantunCar {
     // 下拉選單：按鈕代號（顯示中文，實際送出英文短碼）
     export enum Btn {
         //% block="前進"
-        FWD,
+        FWD = 0,
         //% block="後退"
-        BACK,
+        BACK = 1,
         //% block="左"
-        LEFT,
+        LEFT = 2,
         //% block="右"
-        RIGHT,
+        RIGHT = 3,
         //% block="油門"
-        GO,
+        GO = 4,
         //% block="A"
-        A,
+        A = 5,
         //% block="B"
-        B
+        B = 6
     }
 
-    function btnCode(b: Btn): string {
-        switch (b) {
-            case Btn.FWD: return "FWD"
-            case Btn.BACK: return "BACK"
-            case Btn.LEFT: return "LEFT"
-            case Btn.RIGHT: return "RIGHT"
-            case Btn.GO: return "GO"
-            case Btn.A: return "A"
-            default: return "B"
-        }
-    }
-
-    // ---- 內部狀態 ----
+    // ---- 內部狀態：每個代號各用一個變數存（不用陣列查表，最保險）----
     let started = false
     let connected = false
-    let codes: string[] = []      // 收到過的代號
-    let vals: number[] = []       // 各代號最新的值
 
-    let pressBtn: Btn[] = [], pressAct: (() => void)[] = []
-    let releaseBtn: Btn[] = [], releaseAct: (() => void)[] = []
+    let vFWD = 0
+    let vBACK = 0
+    let vLEFT = 0
+    let vRIGHT = 0
+    let vGO = 0
+    let vA = 0
+    let vB = 0
+    let vSTEER = 0
+    let vJX = 0
+    let vJY = 0
 
-    function setVal(code: string, v: number) {
-        for (let i = 0; i < codes.length; i++) {
-            if (codes[i] == code) { vals[i] = v; return }
-        }
-        codes.push(code); vals.push(v)
+    function getBtnVal(b: Btn): number {
+        if (b == Btn.FWD) return vFWD
+        if (b == Btn.BACK) return vBACK
+        if (b == Btn.LEFT) return vLEFT
+        if (b == Btn.RIGHT) return vRIGHT
+        if (b == Btn.GO) return vGO
+        if (b == Btn.A) return vA
+        return vB
     }
-    function getVal(code: string): number {
-        for (let i = 0; i < codes.length; i++) {
-            if (codes[i] == code) return vals[i]
+
+    // 事件處理器（用固定陣列，只存 handler）
+    let pressCode: number[] = []
+    let pressAct: (() => void)[] = []
+    let releaseCode: number[] = []
+    let releaseAct: (() => void)[] = []
+
+    function fireBtn(code: number, down: boolean): void {
+        if (down) {
+            for (let i = 0; i < pressCode.length; i++) {
+                if (pressCode[i] == code) pressAct[i]()
+            }
+        } else {
+            for (let i = 0; i < releaseCode.length; i++) {
+                if (releaseCode[i] == code) releaseAct[i]()
+            }
         }
-        return 0
+    }
+
+    // 把一顆按鈕代號的新值存起來，並在 0/1 變化時觸發事件
+    function setBtn(code: number, v: number): void {
+        let old = getBtnVal(code)
+        if (code == Btn.FWD) vFWD = v
+        else if (code == Btn.BACK) vBACK = v
+        else if (code == Btn.LEFT) vLEFT = v
+        else if (code == Btn.RIGHT) vRIGHT = v
+        else if (code == Btn.GO) vGO = v
+        else if (code == Btn.A) vA = v
+        else if (code == Btn.B) vB = v
+        if (v == 1 && old != 1) fireBtn(code, true)
+        else if (v == 0 && old != 0) fireBtn(code, false)
     }
 
     // ---- 馬達差速（內部）----
-    function driveWheels(left: number, right: number) {
+    function driveWheels(left: number, right: number): void {
         left = Math.constrain(left, -100, 100)
         right = Math.constrain(right, -100, 100)
         // 左輪 P8(前) / P14(後)
@@ -78,7 +101,7 @@ namespace nantunCar {
             pins.analogWritePin(AnalogPin.P14, 0)
         } else {
             pins.analogWritePin(AnalogPin.P8, 0)
-            pins.analogWritePin(AnalogPin.P14, Math.round(Math.map(-left, 0, 100, 0, 1023)))
+            pins.analogWritePin(AnalogPin.P14, Math.round(Math.map(0 - left, 0, 100, 0, 1023)))
         }
         // 右輪 P2(前) / P13(後)
         if (right >= 0) {
@@ -86,36 +109,34 @@ namespace nantunCar {
             pins.analogWritePin(AnalogPin.P13, 0)
         } else {
             pins.analogWritePin(AnalogPin.P2, 0)
-            pins.analogWritePin(AnalogPin.P13, Math.round(Math.map(-right, 0, 100, 0, 1023)))
+            pins.analogWritePin(AnalogPin.P13, Math.round(Math.map(0 - right, 0, 100, 0, 1023)))
         }
     }
 
-    // ---- 收訊解析 ----
-    function handleLine(line: string) {
-        let ci = line.indexOf(":")
-        if (ci < 0) return
-        let code = line.substr(0, ci)
-        let rest = line.substr(ci + 1)
-        let comma = rest.indexOf(",")
-        if (comma >= 0) {   // 搖桿 x,y → 存成 代號X / 代號Y
-            setVal(code + "X", parseFloat(rest.substr(0, comma)))
-            setVal(code + "Y", parseFloat(rest.substr(comma + 1)))
+    // ---- 收訊解析：用 split，最標準 ----
+    function handleLine(line: string): void {
+        let parts = line.split(":")
+        if (parts.length < 2) return
+        let code = parts[0]
+        let rest = parts[1]
+
+        // 搖桿 x,y
+        if (rest.indexOf(",") >= 0) {
+            let xy = rest.split(",")
+            vJX = parseFloat(xy[0])
+            if (xy.length > 1) vJY = parseFloat(xy[1])
             return
         }
+
         let v = parseFloat(rest)
-        let old = getVal(code)
-        setVal(code, v)
-        if (v == 1 && old != 1) fireBtn(code, true)
-        else if (v == 0 && old != 0) fireBtn(code, false)
-    }
-    function fireBtn(code: string, pressed: boolean) {
-        if (pressed) {
-            for (let i = 0; i < pressBtn.length; i++)
-                if (btnCode(pressBtn[i]) == code) pressAct[i]()
-        } else {
-            for (let i = 0; i < releaseBtn.length; i++)
-                if (btnCode(releaseBtn[i]) == code) releaseAct[i]()
-        }
+        if (code == "FWD") setBtn(Btn.FWD, v)
+        else if (code == "BACK") setBtn(Btn.BACK, v)
+        else if (code == "LEFT") setBtn(Btn.LEFT, v)
+        else if (code == "RIGHT") setBtn(Btn.RIGHT, v)
+        else if (code == "GO") setBtn(Btn.GO, v)
+        else if (code == "A") setBtn(Btn.A, v)
+        else if (code == "B") setBtn(Btn.B, v)
+        else if (code == "STEER") vSTEER = v
     }
 
     // ==================== 起手 ====================
@@ -139,11 +160,12 @@ namespace nantunCar {
         bluetooth.onBluetoothDisconnected(function () {
             connected = false
             driveWheels(0, 0)
-            for (let i = 0; i < vals.length; i++) vals[i] = 0   // 全部歸零（按鈕視為放開）
+            vFWD = 0; vBACK = 0; vLEFT = 0; vRIGHT = 0; vGO = 0; vA = 0; vB = 0; vSTEER = 0; vJX = 0; vJY = 0
             basic.showIcon(IconNames.No)
         })
         bluetooth.onUartDataReceived(serial.delimiters(Delimiter.NewLine), function () {
-            handleLine(bluetooth.uartReadUntil(serial.delimiters(Delimiter.NewLine)))
+            let line = bluetooth.uartReadUntil(serial.delimiters(Delimiter.NewLine))
+            handleLine(line)
         })
     }
 
@@ -164,7 +186,8 @@ namespace nantunCar {
     //% blockId=nc_on_press block="當收到按鈕 %b 被按下"
     //% group="收控制訊號" weight=100
     export function onButtonDown(b: Btn, handler: () => void): void {
-        pressBtn.push(b); pressAct.push(handler)
+        pressCode.push(b)
+        pressAct.push(handler)
     }
 
     /**
@@ -173,7 +196,8 @@ namespace nantunCar {
     //% blockId=nc_on_release block="當收到按鈕 %b 放開"
     //% group="收控制訊號" weight=95
     export function onButtonUp(b: Btn, handler: () => void): void {
-        releaseBtn.push(b); releaseAct.push(handler)
+        releaseCode.push(b)
+        releaseAct.push(handler)
     }
 
     /**
@@ -182,7 +206,7 @@ namespace nantunCar {
     //% blockId=nc_is_pressed block="按鈕 %b 被按下?"
     //% group="收控制訊號" weight=90
     export function isPressed(b: Btn): boolean {
-        return getVal(btnCode(b)) == 1
+        return getBtnVal(b) == 1
     }
 
     /**
@@ -191,7 +215,7 @@ namespace nantunCar {
     //% blockId=nc_steer block="方向盤數值"
     //% group="收控制訊號" weight=80
     export function steerValue(): number {
-        return getVal("STEER")
+        return vSTEER
     }
 
     /**
@@ -200,7 +224,7 @@ namespace nantunCar {
     //% blockId=nc_joy_x block="搖桿 X"
     //% group="收控制訊號" weight=70
     export function joystickX(): number {
-        return getVal("JX")
+        return vJX
     }
 
     /**
@@ -209,7 +233,7 @@ namespace nantunCar {
     //% blockId=nc_joy_y block="搖桿 Y"
     //% group="收控制訊號" weight=69
     export function joystickY(): number {
-        return getVal("JY")
+        return vJY
     }
 
     // ==================== 車子動作 ====================
