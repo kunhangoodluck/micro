@@ -1,6 +1,6 @@
 {
     "name": "nantun-car-remote",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "南屯遙控車：解析 iPad 控制台訊號、驅動 MoonCar 差速馬達、讀循跡。全中文積木。藍牙由專案端官方藍牙擴充處理。",
     "license": "MIT",
     "dependencies": {
